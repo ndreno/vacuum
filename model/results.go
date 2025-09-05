@@ -54,7 +54,7 @@ func NewRuleResultSet(results []RuleFunctionResult) *RuleResultSet {
 	}
 	rrs := &RuleResultSet{
 		Results:     pointerResults,
-		categoryMap: make(map[*RuleCategory][]*RuleFunctionResult),
+		CategoryMap: make(map[*RuleCategory][]*RuleFunctionResult),
 	}
 	rrs.GetErrorCount()
 	rrs.GetInfoCount()
@@ -74,7 +74,7 @@ func NewRuleResultSetPointer(results []*RuleFunctionResult) *RuleResultSet {
 	}
 	return &RuleResultSet{
 		Results:     pointerResults,
-		categoryMap: make(map[*RuleCategory][]*RuleFunctionResult),
+		CategoryMap: make(map[*RuleCategory][]*RuleFunctionResult),
 	}
 }
 
@@ -197,8 +197,8 @@ func (rr *RuleResultSet) GetInfoCount() int {
 func (rr *RuleResultSet) GetResultsByRuleCategory(category string) []*RuleFunctionResult {
 
 	// check for seen state.
-	if RuleCategories[category] != nil && rr.categoryMap[RuleCategories[category]] != nil {
-		return rr.categoryMap[RuleCategories[category]]
+	if RuleCategories[category] != nil && rr.CategoryMap[RuleCategories[category]] != nil {
+		return rr.CategoryMap[RuleCategories[category]]
 	}
 
 	var results []*RuleFunctionResult
@@ -217,7 +217,7 @@ func (rr *RuleResultSet) GetResultsByRuleCategory(category string) []*RuleFuncti
 		}
 	}
 	if RuleCategories[category] != nil && len(results) > 0 {
-		rr.categoryMap[RuleCategories[category]] = results
+		rr.CategoryMap[RuleCategories[category]] = results
 	}
 	return results
 }

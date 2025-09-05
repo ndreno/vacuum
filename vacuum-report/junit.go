@@ -26,11 +26,12 @@ type TestSuite struct {
 	Name      string      `xml:"name,attr"`
 	Tests     int         `xml:"tests,attr"`
 	Failures  int         `xml:"failures,attr"`
+	Time      float64     `xml:"time,attr"`
 	TestCases []*TestCase `xml:"testcase"`
 }
 
 type Properties struct {
-	xml.Name   `xml:"properties"`
+	XMLName    xml.Name    `xml:"properties"`
 	Properties []*Property `xml:"property"`
 }
 
@@ -42,62 +43,92 @@ type Property struct {
 type TestCase struct {
 	Name       string      `xml:"name,attr"`
 	ClassName  string      `xml:"classname,attr"`
-	Line       int         `xml:"line,attr,omitempty"`
 	Failure    *Failure    `xml:"failure,omitempty"`
 	Properties *Properties `xml:"properties,omitempty"`
-	File       string      `xml:"file,attr,omitempty"`
 }
 
 type Failure struct {
-	Message  string `xml:"message,attr,omitempty"`
-	Type     string `xml:"type,attr,omitempty"`
-	File     string `xml:"file,attr,omitempty"`
+	Message  string `xml:"message,attr"`
+	Type     string `xml:"type,attr"`
 	Contents string `xml:",innerxml"`
 }
 
 func BuildJUnitReport(resultSet *model.RuleResultSet, t time.Time, args []string) []byte {
-
 	since := time.Since(t)
 	var suites []*TestSuite
-
 	var cats = model.RuleCategoriesOrdered
+	tmpl := `File: {{ .File }}
+Line: {{ .Line }}
+JSON Path: {{ .Path }}
+Rule: {{ .RuleId }}
+Severity: {{ .Severity }}
 
-	tmpl := `
-	{{ .Message }}
-	
-    JSON Path: {{ .Path }}
-	Rule: {{ .Rule.Id }}
-	Severity: {{ .Rule.Severity }}
-	Line: {{ .StartNode.Line }}`
+{{ .Message }}`
 
-	parsedTemplate, _ := template.New("failure").Parse(tmpl)
+	parsedTemplate, err := template.New("failure").Parse(tmpl)
+	if err != nil {
+		// Handle error, e.g., log it or return an empty report
+		return []byte{}
+	}
 
-	gf, gtc := 0, 0 // global failure count, global test cases count.
+	gf, gtc := 0, 0 // global failure count, global test cases count
 
-	// try a category print out.
 	for _, val := range cats {
 		categoryResults := resultSet.GetResultsByRuleCategory(val.Id)
-
 		f := 0
 		var tc []*TestCase
 
 		for _, r := range categoryResults {
-			var sb bytes.Buffer
-			_ = parsedTemplate.Execute(&sb, r)
-			if r.Rule.Severity == model.SeverityError || r.Rule.Severity == model.SeverityWarn {
-				f++
-				gf++
-			}
-
 			line := 1
 			if r.StartNode != nil {
 				line = r.StartNode.Line
 			}
 
+			file := ""
+			if r.Origin != nil && r.Origin.AbsoluteLocation != "" {
+				file = r.Origin.AbsoluteLocation
+			} else if len(args) > 0 {
+				file = args[0]
+			}
+
+			// Prepare template data
+			templateData := struct {
+				File     string
+				Line     int
+				Path     string
+				RuleId   string
+				Severity string
+				Message  string
+			}{
+				File:     file,
+				Line:     line,
+				Path:     r.Path,
+				RuleId:   r.Rule.Id,
+				Severity: r.Rule.Severity,
+				Message:  r.Message,
+			}
+
+			var sb bytes.Buffer
+			err := parsedTemplate.Execute(&sb, templateData)
+			if err != nil {
+				// Handle error, e.g., log it or skip this test case
+				continue
+			}
+
+			if r.Rule.Severity == model.SeverityError || r.Rule.Severity == model.SeverityWarn {
+				f++
+				gf++
+			}
+
+			// Create test case name with rule and location info
+			testCaseName := fmt.Sprintf("Rule: %s - JSON Path: %s", r.Rule.Id, r.Path)
+			if len(testCaseName) > 200 { // Prevent excessively long names
+				testCaseName = testCaseName[:200] + "..."
+			}
+
 			tCase := &TestCase{
-				Line:      r.StartNode.Line,
-				Name:      fmt.Sprintf("%s", val.Name),
-				ClassName: r.Rule.Id,
+				Name:      testCaseName, // This should now be the descriptive name
+				ClassName: fmt.Sprintf("oas-linter.%s", r.Rule.Id),
 				Failure: &Failure{
 					Message:  r.Message,
 					Type:     strings.ToUpper(r.Rule.Severity),
@@ -105,55 +136,25 @@ func BuildJUnitReport(resultSet *model.RuleResultSet, t time.Time, args []string
 				},
 				Properties: &Properties{
 					Properties: []*Property{
-						{
-							Name:  "path",
-							Value: r.Path,
-						},
-						{
-							Name:  "rule",
-							Value: r.Rule.Id,
-						},
-						{
-							Name:  "severity",
-							Value: r.Rule.Severity,
-						},
-						{
-							Name:  "line",
-							Value: fmt.Sprintf("%d", line),
-						},
+						{Name: "rule", Value: r.Rule.Id},
+						{Name: "severity", Value: r.Rule.Severity},
+						{Name: "line", Value: fmt.Sprintf("%d", line)},
+						{Name: "file", Value: file},
+						{Name: "json_path", Value: r.Path},
 					},
 				},
 			}
-
-			if r.Origin != nil && r.Origin.AbsoluteLocation != "" {
-				tCase.File = r.Origin.AbsoluteLocation
-				tCase.Properties.Properties = append(tCase.Properties.Properties, &Property{
-					Name:  "file",
-					Value: r.Origin.AbsoluteLocation,
-				})
-				tCase.Failure.File = r.Origin.AbsoluteLocation
-			} else {
-				if len(args) > 0 {
-					tCase.File = args[0]
-					tCase.Properties.Properties = append(tCase.Properties.Properties, &Property{
-						Name:  "file",
-						Value: args[0],
-					})
-					tCase.Failure.File = args[0]
-				}
-			}
-
 			tc = append(tc, tCase)
 		}
 
 		if len(tc) > 0 {
 			ts := &TestSuite{
-				Name:      fmt.Sprintf("%s", val.Name),
+				Name:      fmt.Sprintf("OAS Linting - %s", val.Name), // Improved suite name
 				Tests:     len(categoryResults),
 				Failures:  f,
+				Time:      since.Seconds(),
 				TestCases: tc,
 			}
-
 			suites = append(suites, ts)
 		}
 		gtc += len(tc)
@@ -166,7 +167,15 @@ func BuildJUnitReport(resultSet *model.RuleResultSet, t time.Time, args []string
 		Time:       since.Seconds(),
 	}
 
-	b, _ := xml.MarshalIndent(allSuites, "", " ")
-	return b
+	// Add XML declaration
+	var buf bytes.Buffer
+	buf.WriteString(xml.Header)
+	encoder := xml.NewEncoder(&buf)
+	encoder.Indent("", "  ")
+	if err := encoder.Encode(allSuites); err != nil {
+		// Handle error, e.g., log it or return an empty report
+		return []byte{}
+	}
 
+	return buf.Bytes()
 }
